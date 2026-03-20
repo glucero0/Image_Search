@@ -33,6 +33,7 @@
         .button-group {
             display: flex;
             gap: 10px;
+            flex-wrap: wrap;
         }
         button { 
             padding: 10px 24px; 
@@ -46,6 +47,7 @@
         }
         .search-btn { background: #1a73e8; }
         .clear-btn { background: #5f6368; }
+        .more-btn { background: #34a853; display: none; margin: 20px auto; }
         button:hover { opacity: 0.9; }
         
         .grid { 
@@ -64,14 +66,44 @@
             max-width: 100%; 
             height: auto;
             border-radius: 4px; 
-            cursor: pointer; 
+            cursor: zoom-in; 
             transition: transform 0.2s; 
             display: block;
             margin: 0 auto;
         }
         .img-card img:hover { transform: scale(1.02); }
+        
+        /* Modal Styles */
+        #imageModal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            padding-top: 50px;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.9);
+        }
+        .modal-content {
+            margin: auto;
+            display: block;
+            max-width: 90%;
+            max-height: 85vh;
+            border-radius: 4px;
+        }
+        .close-modal {
+            position: absolute;
+            top: 15px;
+            right: 35px;
+            color: #f1f1f1;
+            font-size: 60px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
         .error { color: #d93025; font-weight: bold; padding: 20px; }
-        .loading { font-style: italic; color: #666; padding: 20px; }
+        .loading { font-style: italic; color: #666; padding: 20px; text-align: center; width: 100%; grid-column: 1 / -1; }
     </style>
 </head>
 <body>
@@ -84,30 +116,64 @@
         </div>
         <div class="input-group">
             <label for="query">Search Query</label>
-            <input type="text" id="query" placeholder="e.g. Black Ferrari" onkeydown="if(event.key==='Enter') runSearch()">
+            <input type="text" id="query" placeholder="e.g. Black Ferrari" onkeydown="if(event.key==='Enter') runSearch(false)">
         </div>
         <div class="button-group">
-            <button class="search-btn" onclick="runSearch()">Search Images</button>
+            <button class="search-btn" onclick="runSearch(false)">Search Images</button>
             <button class="clear-btn" onclick="clearResults()">Clear Results</button>
         </div>
     </div>
 
     <div id="results" class="grid"></div>
+    
+    <div style="text-align: center; width: 100%;">
+        <button id="moreBtn" class="more-btn" onclick="runSearch(true)">More Results</button>
+    </div>
 
-   <script>
-    // 1. Clear function
+    <div id="imageModal">
+        <span class="close-modal" onclick="closeModal()">&times;</span>
+        <img class="modal-content" id="modalImg">
+    </div>
+
+<script>
+    let currentOffset = 0;
+
     function clearResults() {
         const resultsDiv = document.getElementById('results');
-        if (resultsDiv) resultsDiv.innerHTML = '';
         const queryInput = document.getElementById('query');
+        const moreBtn = document.getElementById('moreBtn');
+        
+        if (resultsDiv) resultsDiv.innerHTML = '';
         if (queryInput) queryInput.value = '';
+        if (moreBtn) moreBtn.style.display = 'none';
+        
+        currentOffset = 0;
         console.log("Grid cleared");
     }
 
-    // 2. Main Search function
-    async function runSearch() {
-        console.log("Search initiated...");
+    function openModal(src) {
+        const modal = document.getElementById('imageModal');
+        const modalImg = document.getElementById('modalImg');
+        modal.style.display = "block";
+        modalImg.src = src;
+    }
+
+    function closeModal() {
+        document.getElementById('imageModal').style.display = "none";
+    }
+
+    // Close modal when clicking dark background
+    window.onclick = function(event) {
+        const modal = document.getElementById('imageModal');
+        if (event.target == modal) {
+            closeModal();
+        }
+    }
+
+    async function runSearch(isMore) {
+        console.log("Search execution started. isMore:", isMore);
         const resultsDiv = document.getElementById('results');
+        const moreBtn = document.getElementById('moreBtn');
         const apiKey = document.getElementById('apiKey').value;
         const query = document.getElementById('query').value;
 
@@ -116,7 +182,16 @@
             return;
         }
 
-        resultsDiv.innerHTML = '<div class="loading">Querying Brave Index...</div>';
+        if (!isMore) {
+            resultsDiv.innerHTML = '<div class="loading">Querying Brave Index...</div>';
+            currentOffset = 0;
+            moreBtn.style.display = 'none';
+        } else {
+            const loader = document.createElement('div');
+            loader.className = 'loading';
+            loader.innerText = 'Fetching more images...';
+            resultsDiv.appendChild(loader);
+        }
 
         try {
             const response = await fetch('/search', {
@@ -124,20 +199,27 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     query: query,
-                    apiKey: apiKey
+                    apiKey: apiKey,
+                    offset: currentOffset
                 })
             });
 
             const data = await response.json();
-            resultsDiv.innerHTML = '';
+            
+            // Remove loading indicators
+            const loadings = resultsDiv.getElementsByClassName('loading');
+            while(loadings.length > 0) {
+                loadings[0].parentNode.removeChild(loadings[0]);
+            }
 
             if (data.error) {
-                resultsDiv.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                resultsDiv.innerHTML += `<div class="error">Error: ${data.error}</div>`;
                 return;
             }
 
             if (!Array.isArray(data) || data.length === 0) {
-                resultsDiv.innerHTML = '<div>No images found for this query.</div>';
+                if (!isMore) resultsDiv.innerHTML = '<div>No images found.</div>';
+                moreBtn.style.display = 'none';
                 return;
             }
 
@@ -149,7 +231,10 @@
                     const img = document.createElement('img');
                     img.src = item.properties.url;
                     img.alt = item.title || 'Result';
-                    img.title = "Right-click to save";
+                    img.title = "Click to enlarge / Right-click to save";
+                    
+                    // Trigger modal on click
+                    img.onclick = function() { openModal(this.src); };
                     
                     img.onerror = function() {
                         this.parentElement.style.display = 'none';
@@ -160,11 +245,16 @@
                 }
             });
 
+            currentOffset += data.length;
+            moreBtn.style.display = 'inline-block';
+
         } catch (err) {
             console.error("Fetch error:", err);
-            resultsDiv.innerHTML = `<div class="error">Network Error: ${err.message}</div>`;
+            resultsDiv.innerHTML += `<div class="error">Network Error: ${err.message}</div>`;
         }
     }
     
     console.log("Scripts loaded successfully.");
 </script>
+</body>
+</html>
