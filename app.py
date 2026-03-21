@@ -20,7 +20,7 @@ def brave_image_search(query, api_key):
     params = {
         "q": query,
         "safesearch": "off",
-        "count": 20
+        "count": 150  # Fetch max images upfront; pagination is handled client-side
     }
     
     response = requests.get(url, headers=headers, params=params)
@@ -34,8 +34,6 @@ def brave_image_search(query, api_key):
 
 @app.route('/')
 def index():
-    # Adding a print here will show you in the terminal 
-    # exactly where Flask is looking for the file
     print(f"DEBUG: Looking for index.html in: {template_dir}")
     return render_template('index.html')
 

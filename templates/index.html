@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Image Search</title>
+    <title>Image Search</title>
     <style>
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
@@ -136,42 +136,62 @@
     </div>
 
 <script>
-    let currentOffset = 0;
+    const PAGE_SIZE = 20;
+    let allResults = [];
+    let currentPage = 0;
 
     function clearResults() {
         const resultsDiv = document.getElementById('results');
         const queryInput = document.getElementById('query');
         const moreBtn = document.getElementById('moreBtn');
-        
         if (resultsDiv) resultsDiv.innerHTML = '';
         if (queryInput) queryInput.value = '';
         if (moreBtn) moreBtn.style.display = 'none';
-        
-        currentOffset = 0;
+        allResults = [];
+        currentPage = 0;
         console.log("Grid cleared");
     }
 
     function openModal(src) {
-        const modal = document.getElementById('imageModal');
-        const modalImg = document.getElementById('modalImg');
-        modal.style.display = "block";
-        modalImg.src = src;
+        document.getElementById('imageModal').style.display = "block";
+        document.getElementById('modalImg').src = src;
     }
 
     function closeModal() {
         document.getElementById('imageModal').style.display = "none";
     }
 
-    // Close modal when clicking dark background
     window.onclick = function(event) {
         const modal = document.getElementById('imageModal');
-        if (event.target == modal) {
-            closeModal();
-        }
+        if (event.target == modal) closeModal();
+    }
+
+    function renderPage() {
+        const resultsDiv = document.getElementById('results');
+        const moreBtn = document.getElementById('moreBtn');
+        const start = currentPage * PAGE_SIZE;
+        const slice = allResults.slice(start, start + PAGE_SIZE);
+
+        slice.forEach(item => {
+            if (item.properties && item.properties.url) {
+                const card = document.createElement('div');
+                card.className = 'img-card';
+                const img = document.createElement('img');
+                img.src = item.properties.url;
+                img.alt = item.title || 'Result';
+                img.title = "Click to enlarge / Right-click to save";
+                img.onclick = function() { openModal(this.src); };
+                img.onerror = function() { this.parentElement.style.display = 'none'; };
+                card.appendChild(img);
+                resultsDiv.appendChild(card);
+            }
+        });
+
+        currentPage++;
+        moreBtn.style.display = (currentPage * PAGE_SIZE < allResults.length) ? 'inline-block' : 'none';
     }
 
     async function runSearch(isMore) {
-        console.log("Search execution started. isMore:", isMore);
         const resultsDiv = document.getElementById('results');
         const moreBtn = document.getElementById('moreBtn');
         const apiKey = document.getElementById('apiKey').value;
@@ -182,78 +202,46 @@
             return;
         }
 
-        if (!isMore) {
-            resultsDiv.innerHTML = '<div class="loading">Querying Brave Index...</div>';
-            currentOffset = 0;
-            moreBtn.style.display = 'none';
-        } else {
-            const loader = document.createElement('div');
-            loader.className = 'loading';
-            loader.innerText = 'Fetching more images...';
-            resultsDiv.appendChild(loader);
+        // More Results just pages through the already-fetched cache
+        if (isMore) {
+            renderPage();
+            return;
         }
+
+        // Fresh search
+        resultsDiv.innerHTML = '<div class="loading">Querying Brave Index...</div>';
+        allResults = [];
+        currentPage = 0;
+        moreBtn.style.display = 'none';
 
         try {
             const response = await fetch('/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    query: query,
-                    apiKey: apiKey,
-                    offset: currentOffset
-                })
+                body: JSON.stringify({ query, apiKey })
             });
 
             const data = await response.json();
-            
-            // Remove loading indicators
-            const loadings = resultsDiv.getElementsByClassName('loading');
-            while(loadings.length > 0) {
-                loadings[0].parentNode.removeChild(loadings[0]);
-            }
+            resultsDiv.innerHTML = '';
 
             if (data.error) {
-                resultsDiv.innerHTML += `<div class="error">Error: ${data.error}</div>`;
+                resultsDiv.innerHTML = `<div class="error">Error: ${data.error}</div>`;
                 return;
             }
-
             if (!Array.isArray(data) || data.length === 0) {
-                if (!isMore) resultsDiv.innerHTML = '<div>No images found.</div>';
-                moreBtn.style.display = 'none';
+                resultsDiv.innerHTML = '<div>No images found.</div>';
                 return;
             }
 
-            data.forEach(item => {
-                if (item.properties && item.properties.url) {
-                    const card = document.createElement('div');
-                    card.className = 'img-card';
-                    
-                    const img = document.createElement('img');
-                    img.src = item.properties.url;
-                    img.alt = item.title || 'Result';
-                    img.title = "Click to enlarge / Right-click to save";
-                    
-                    // Trigger modal on click
-                    img.onclick = function() { openModal(this.src); };
-                    
-                    img.onerror = function() {
-                        this.parentElement.style.display = 'none';
-                    };
-
-                    card.appendChild(img);
-                    resultsDiv.appendChild(card);
-                }
-            });
-
-            currentOffset += data.length;
-            moreBtn.style.display = 'inline-block';
+            allResults = data;
+            renderPage();
 
         } catch (err) {
             console.error("Fetch error:", err);
-            resultsDiv.innerHTML += `<div class="error">Network Error: ${err.message}</div>`;
+            resultsDiv.innerHTML = `<div class="error">Network Error: ${err.message}</div>`;
         }
     }
-    
+
     console.log("Scripts loaded successfully.");
 </script>
 </body>
