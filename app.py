@@ -3,11 +3,9 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import requests
 
-# This line finds the exact folder where THIS app.py is saved
 base_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(base_dir, 'templates')
 
-# We tell Flask exactly where to look for the templates folder
 app = Flask(__name__, template_folder=template_dir)
 CORS(app)
 
@@ -20,7 +18,7 @@ def brave_image_search(query, api_key):
     params = {
         "q": query,
         "safesearch": "off",
-        "count": 150  # Fetch max images upfront; pagination is handled client-side
+        "count": 150
     }
     
     response = requests.get(url, headers=headers, params=params)
@@ -34,7 +32,6 @@ def brave_image_search(query, api_key):
 
 @app.route('/')
 def index():
-    print(f"DEBUG: Looking for index.html in: {template_dir}")
     return render_template('index.html')
 
 @app.route('/search', methods=['POST'])
