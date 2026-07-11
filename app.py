@@ -1,11 +1,13 @@
 import ipaddress
 import os
-from urllib.parse import urlparse
+import socket
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 from flask_cors import CORS
+from requests.adapters import HTTPAdapter
 
 load_dotenv()
 
@@ -19,6 +21,15 @@ BRAVE_API_URL = "https://api.search.brave.com/res/v1/images/search"
 MAX_QUERY_LENGTH = 400
 REQUEST_TIMEOUT = (5, 30)
 MAX_PROXY_BYTES = 15 * 1024 * 1024
+BLOCKED_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "metadata.google.internal",
+        "metadata.google",
+    }
+)
 ALLOWED_SAFESEARCH = {"off", "strict"}
 DEFAULT_SAFESEARCH = "strict"
 DEFAULT_COUNTRY = "US"
@@ -95,39 +106,116 @@ def validate_search_lang(value):
     return normalized
 
 
-def is_safe_image_url(url):
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return False
-
-    hostname = parsed.hostname
-    if not hostname:
-        return False
-
-    lowered = hostname.lower()
-    if lowered in {"localhost", "127.0.0.1", "::1"}:
-        return False
-
+def is_blocked_ip(ip_str):
     try:
-        ip = ipaddress.ip_address(hostname)
+        ip = ipaddress.ip_address(ip_str)
     except ValueError:
-        return True
-
-    return not (
+        return False
+    return (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
+        or ip.is_unspecified
     )
 
 
-def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
-    if not is_safe_image_url(url):
+def validate_proxy_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
         raise ProxyError("Invalid or disallowed image URL", 400)
 
+    hostname = parsed.hostname
+    if not hostname:
+        raise ProxyError("Invalid or disallowed image URL", 400)
+
+    lowered = hostname.lower().rstrip(".")
+    if lowered in BLOCKED_HOSTNAMES:
+        raise ProxyError("Invalid or disallowed image URL", 400)
+
+    if is_blocked_ip(hostname):
+        raise ProxyError("Invalid or disallowed image URL", 400)
+
+    return parsed
+
+
+def resolve_public_ip(hostname):
     try:
-        response = requests.get(
+        addrinfos = socket.getaddrinfo(
+            hostname,
+            None,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except socket.gaierror as exc:
+        raise ProxyError("Could not resolve image host", 400) from exc
+
+    if not addrinfos:
+        raise ProxyError("Could not resolve image host", 400)
+
+    for _, _, _, _, sockaddr in addrinfos:
+        if is_blocked_ip(sockaddr[0]):
+            raise ProxyError("Image host resolves to a disallowed address", 400)
+
+    for _, _, _, _, sockaddr in addrinfos:
+        ip = sockaddr[0]
+        if not is_blocked_ip(ip):
+            return ip
+
+    raise ProxyError("Could not resolve image host", 400)
+
+
+class PinningHTTPAdapter(HTTPAdapter):
+    def __init__(self, hostname, pinned_ip):
+        self.hostname = hostname
+        self.pinned_ip = pinned_ip
+        super().__init__()
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        parsed = urlparse(request.url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+
+        netloc = str(self.pinned_ip)
+        if port not in (80, 443):
+            netloc = f"{netloc}:{port}"
+
+        request.url = urlunparse(
+            (parsed.scheme, netloc, path, "", "", "")
+        )
+        request.headers["Host"] = self.hostname
+        return super().send(
+            request,
+            stream=stream,
+            timeout=timeout,
+            verify=verify,
+            cert=cert,
+            proxies=proxies,
+        )
+
+
+def is_safe_image_url(url):
+    try:
+        validate_proxy_url(url)
+    except ProxyError:
+        return False
+    return True
+
+
+def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
+    parsed = validate_proxy_url(url)
+    pinned_ip = resolve_public_ip(parsed.hostname)
+
+    session = requests.Session()
+    adapter = PinningHTTPAdapter(parsed.hostname, pinned_ip)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    try:
+        response = session.get(
             url,
             timeout=timeout,
             stream=True,
