@@ -159,6 +159,27 @@ def test_proxy_rejects_unsafe_url(client):
     assert "disallowed" in response.get_json()["error"]
 
 
+def test_proxy_rejects_unauthorized_url(client):
+    response = client.get(
+        "/proxy",
+        query_string={"url": "https://example.com/not-from-search.jpg"},
+    )
+
+    assert response.status_code == 403
+    assert "not authorized" in response.get_json()["error"]
+
+
+def test_search_registers_proxy_urls(client, api_key, brave_response):
+    from app import ALLOWED_PROXY_URLS
+
+    with patch("app.brave_image_search", return_value=brave_response["results"]):
+        response = client.post("/search", json={"query": "black ferrari"})
+
+    assert response.status_code == 200
+    assert "https://example.com/image1.jpg" in ALLOWED_PROXY_URLS
+    assert "https://example.com/image2.png" in ALLOWED_PROXY_URLS
+
+
 def test_proxy_returns_image(client):
     with patch(
         "app.fetch_proxied_image",

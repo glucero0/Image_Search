@@ -86,9 +86,9 @@ Returns a JSON array of Brave image results, or `{ "error": "..." }` with an app
 
 Fetches an image server-side and returns the bytes. Used by ZIP download to work around browser CORS restrictions.
 
-- Only `http`/`https` URLs are allowed
+- Only image URLs returned by a recent `/search` on this server are authorized
 - Hostnames are resolved before fetch; private, loopback, and link-local addresses are blocked
-- Requests connect to the verified public IP with a pinned HTTP adapter to reduce DNS rebinding risk
+- Outbound requests use a pinned public IP and reconstructed request URL instead of the raw client input
 - Responses are limited to 15 MB and must have an `image/*` content type
 
 Returns the image bytes on success, or `{ "error": "..." }` on failure.

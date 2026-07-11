@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from app import app
+from app import app, clear_allowed_proxy_urls
+
+
+@pytest.fixture(autouse=True)
+def reset_proxy_allowlist():
+    clear_allowed_proxy_urls()
+    yield
+    clear_allowed_proxy_urls()
 
 
 @pytest.fixture

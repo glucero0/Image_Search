@@ -8,6 +8,7 @@ from app import (
     ProxyError,
     fetch_proxied_image,
     is_safe_image_url,
+    register_proxy_urls_from_results,
     resolve_public_ip,
     validate_country,
     validate_proxy_url,
@@ -63,7 +64,17 @@ def test_resolve_public_ip_returns_public_address():
         assert resolve_public_ip("example.com") == "93.184.216.34"
 
 
+def test_fetch_proxied_image_requires_authorization():
+    with pytest.raises(ProxyError, match="not authorized") as exc_info:
+        fetch_proxied_image("https://example.com/image.jpg")
+
+    assert exc_info.value.status_code == 403
+
+
 def test_fetch_proxied_image_returns_bytes():
+    register_proxy_urls_from_results(
+        [{"properties": {"url": "https://example.com/image.jpg"}}]
+    )
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {
@@ -87,6 +98,9 @@ def test_fetch_proxied_image_returns_bytes():
 
 
 def test_fetch_proxied_image_rejects_non_image_content_type():
+    register_proxy_urls_from_results(
+        [{"properties": {"url": "https://example.com/page"}}]
+    )
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Content-Type": "text/html"}
@@ -102,6 +116,9 @@ def test_fetch_proxied_image_rejects_non_image_content_type():
 
 
 def test_fetch_proxied_image_rejects_oversized_image():
+    register_proxy_urls_from_results(
+        [{"properties": {"url": "https://example.com/big.jpg"}}]
+    )
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {
@@ -122,6 +139,9 @@ def test_fetch_proxied_image_rejects_oversized_image():
 
 
 def test_fetch_proxied_image_timeout_raises():
+    register_proxy_urls_from_results(
+        [{"properties": {"url": "https://example.com/image.jpg"}}]
+    )
     mock_session = MagicMock()
     mock_session.get.side_effect = requests.Timeout("timed out")
 

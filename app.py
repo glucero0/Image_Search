@@ -1,6 +1,8 @@
 import ipaddress
 import os
 import socket
+import time
+from threading import Lock
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -21,6 +23,9 @@ BRAVE_API_URL = "https://api.search.brave.com/res/v1/images/search"
 MAX_QUERY_LENGTH = 400
 REQUEST_TIMEOUT = (5, 30)
 MAX_PROXY_BYTES = 15 * 1024 * 1024
+ALLOWED_PROXY_TTL_SECONDS = 3600
+ALLOWED_PROXY_URLS: dict[str, float] = {}
+ALLOWED_PROXY_LOCK = Lock()
 BLOCKED_HOSTNAMES = frozenset(
     {
         "localhost",
@@ -104,6 +109,54 @@ def validate_search_lang(value):
     if len(normalized) < 2 or not normalized.isalpha():
         raise ValueError("search_lang must be a 2+ letter language code")
     return normalized
+
+
+def clear_allowed_proxy_urls():
+    with ALLOWED_PROXY_LOCK:
+        ALLOWED_PROXY_URLS.clear()
+
+
+def cleanup_expired_proxy_urls():
+    now = time.time()
+    with ALLOWED_PROXY_LOCK:
+        expired = [
+            url for url, expires_at in ALLOWED_PROXY_URLS.items() if expires_at <= now
+        ]
+        for url in expired:
+            del ALLOWED_PROXY_URLS[url]
+
+
+def register_proxy_urls_from_results(results):
+    expires_at = time.time() + ALLOWED_PROXY_TTL_SECONDS
+    with ALLOWED_PROXY_LOCK:
+        for item in results:
+            properties = item.get("properties") or {}
+            image_url = properties.get("url")
+            if image_url:
+                ALLOWED_PROXY_URLS[image_url] = expires_at
+
+
+def get_authorized_proxy_url(requested_url):
+    validate_proxy_url(requested_url)
+    cleanup_expired_proxy_urls()
+    with ALLOWED_PROXY_LOCK:
+        expires_at = ALLOWED_PROXY_URLS.get(requested_url)
+        if expires_at and expires_at > time.time():
+            return requested_url
+    raise ProxyError("Image URL is not authorized", 403)
+
+
+def build_pinned_request_url(parsed, pinned_ip):
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    netloc = str(pinned_ip)
+    if port not in (80, 443):
+        netloc = f"{netloc}:{port}"
+
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    return urlunparse((parsed.scheme, netloc, path, "", "", ""))
 
 
 def is_blocked_ip(ip_str):
@@ -206,8 +259,10 @@ def is_safe_image_url(url):
 
 
 def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
-    parsed = validate_proxy_url(url)
+    authorized_url = get_authorized_proxy_url(url)
+    parsed = urlparse(authorized_url)
     pinned_ip = resolve_public_ip(parsed.hostname)
+    request_url = build_pinned_request_url(parsed, pinned_ip)
 
     session = requests.Session()
     adapter = PinningHTTPAdapter(parsed.hostname, pinned_ip)
@@ -216,10 +271,13 @@ def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
 
     try:
         response = session.get(
-            url,
+            request_url,
             timeout=timeout,
             stream=True,
-            headers={"User-Agent": "ImageSearch/1.0"},
+            headers={
+                "User-Agent": "ImageSearch/1.0",
+                "Host": parsed.hostname,
+            },
         )
     except requests.Timeout as exc:
         raise ProxyError("Image request timed out", 504) from exc
@@ -369,6 +427,7 @@ def search():
             country=country,
             search_lang=search_lang,
         )
+        register_proxy_urls_from_results(results)
         return jsonify(results)
     except BraveAPIError as exc:
         return jsonify({"error": str(exc)}), exc.status_code
