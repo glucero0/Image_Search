@@ -49,8 +49,9 @@ class BraveAPIError(Exception):
 
 class ProxyError(Exception):
     def __init__(self, message, status_code=400):
-        super().__init__(message)
+        self.message = message
         self.status_code = status_code
+        super().__init__(message)
 
 
 class ValidationError(Exception):
@@ -384,8 +385,8 @@ def proxy():
     try:
         image_data, content_type = fetch_proxied_image(url)
     except ProxyError as exc:
-        app.logger.warning("Proxy error while fetching image: %s", exc)
-        return jsonify({"error": str(exc)}), exc.status_code
+        app.logger.warning("Proxy error while fetching image: %s", exc.message)
+        return jsonify({"error": exc.message}), exc.status_code
 
     return Response(image_data, mimetype=content_type)
 
