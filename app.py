@@ -11,6 +11,10 @@ from requests.adapters import HTTPAdapter
 
 load_dotenv()
 
+ALLOWED_PROXY_HOSTS = {
+    "imgs.search.brave.com",
+}
+
 base_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(base_dir, "templates")
 
@@ -207,7 +211,11 @@ def is_safe_image_url(url):
 
 def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
     parsed = validate_proxy_url(url)
+    if parsed.hostname not in ALLOWED_PROXY_HOSTS:
+        raise ProxyError("URL host is not allowed", 400)
+
     pinned_ip = resolve_public_ip(parsed.hostname)
+    safe_url = urlunparse(parsed)
 
     session = requests.Session()
     adapter = PinningHTTPAdapter(parsed.hostname, pinned_ip)
@@ -216,7 +224,7 @@ def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
 
     try:
         response = session.get(
-            url,
+            safe_url,
             timeout=timeout,
             stream=True,
             headers={"User-Agent": "ImageSearch/1.0"},
