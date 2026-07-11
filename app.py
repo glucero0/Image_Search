@@ -53,6 +53,12 @@ class ProxyError(Exception):
         self.status_code = status_code
 
 
+class ValidationError(Exception):
+    def __init__(self, message):
+        self.message = message
+        super().__init__(message)
+
+
 PLACEHOLDER_API_KEYS = {
     "",
     "your_brave_search_api_key_here",
@@ -87,7 +93,7 @@ def validate_safesearch(value):
         return DEFAULT_SAFESEARCH
     normalized = str(value).strip().lower()
     if normalized not in ALLOWED_SAFESEARCH:
-        raise ValueError("safesearch must be 'off' or 'strict'")
+        raise ValidationError("safesearch must be 'off' or 'strict'")
     return normalized
 
 
@@ -98,7 +104,7 @@ def validate_country(value):
     if normalized == "ALL":
         return normalized
     if len(normalized) != 2 or not normalized.isalpha():
-        raise ValueError("country must be a 2-letter code or ALL")
+        raise ValidationError("country must be a 2-letter code or ALL")
     return normalized
 
 
@@ -107,7 +113,7 @@ def validate_search_lang(value):
         return DEFAULT_SEARCH_LANG
     normalized = str(value).strip().lower()
     if len(normalized) < 2 or not normalized.isalpha():
-        raise ValueError("search_lang must be a 2+ letter language code")
+        raise ValidationError("search_lang must be a 2+ letter language code")
     return normalized
 
 
@@ -405,8 +411,8 @@ def search():
         safesearch = validate_safesearch(data.get("safesearch"))
         country = validate_country(data.get("country"))
         search_lang = validate_search_lang(data.get("search_lang"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValidationError as exc:
+        return jsonify({"error": exc.message}), 400
 
     api_key = get_api_key()
     if not api_key or api_key in PLACEHOLDER_API_KEYS:

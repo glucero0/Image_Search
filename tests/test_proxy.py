@@ -6,6 +6,7 @@ import socket
 
 from app import (
     ProxyError,
+    ValidationError,
     fetch_proxied_image,
     is_safe_image_url,
     register_proxy_urls_from_results,
@@ -160,7 +161,7 @@ def test_validate_safesearch_defaults_and_accepts_values():
 
 
 def test_validate_safesearch_rejects_invalid_value():
-    with pytest.raises(ValueError, match="safesearch"):
+    with pytest.raises(ValidationError, match="safesearch"):
         validate_safesearch("moderate")
 
 
@@ -171,7 +172,7 @@ def test_validate_country_defaults_and_accepts_values():
 
 
 def test_validate_country_rejects_invalid_value():
-    with pytest.raises(ValueError, match="country"):
+    with pytest.raises(ValidationError, match="country"):
         validate_country("USA")
 
 
@@ -181,5 +182,5 @@ def test_validate_search_lang_defaults_and_accepts_values():
 
 
 def test_validate_search_lang_rejects_invalid_value():
-    with pytest.raises(ValueError, match="search_lang"):
+    with pytest.raises(ValidationError, match="search_lang"):
         validate_search_lang("e")
