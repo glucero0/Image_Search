@@ -320,7 +320,8 @@ def proxy():
     try:
         image_data, content_type = fetch_proxied_image(url)
     except ProxyError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
+        app.logger.warning("Proxy error while fetching image: %s", exc)
+        return jsonify({"error": "Unable to fetch the requested image"}), exc.status_code
 
     return Response(image_data, mimetype=content_type)
 
