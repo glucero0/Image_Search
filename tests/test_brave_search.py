@@ -12,7 +12,13 @@ def test_brave_image_search_returns_results(brave_response):
     mock_response.json.return_value = brave_response
 
     with patch("app.requests.get", return_value=mock_response) as mock_get:
-        results = brave_image_search("black ferrari", "test-key")
+        results = brave_image_search(
+            "black ferrari",
+            "test-key",
+            safesearch="off",
+            country="GB",
+            search_lang="en",
+        )
 
     assert len(results) == 2
     assert results[0]["properties"]["url"] == "https://example.com/image1.jpg"
@@ -20,6 +26,9 @@ def test_brave_image_search_returns_results(brave_response):
     _, kwargs = mock_get.call_args
     assert kwargs["timeout"] == (5, 30)
     assert kwargs["params"]["q"] == "black ferrari"
+    assert kwargs["params"]["safesearch"] == "off"
+    assert kwargs["params"]["country"] == "GB"
+    assert kwargs["params"]["search_lang"] == "en"
 
 
 def test_brave_image_search_missing_results_key():

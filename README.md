@@ -30,11 +30,9 @@ A small Flask app that searches for images via the [Brave Image Search API](http
 
 ## Run
 
-Set `BRAVE_API_KEY` in your environment (or `.env` if you load it manually), then start the server:
+Set `BRAVE_API_KEY` in `.env`, then start the server:
 
 ```bash
-# Windows PowerShell
-$env:BRAVE_API_KEY="your_key_here"
 python app.py
 ```
 
@@ -48,6 +46,12 @@ Optional environment variables:
 | `FLASK_DEBUG` | `0` | Set to `1` to enable Flask debug mode |
 | `PORT` | `5000` | Port for the development server |
 
+## Features
+
+- Image search with configurable **safe search**, **country**, and **language**
+- Grid display with lightbox preview
+- Bulk ZIP download via a server-side **image proxy** (avoids browser CORS failures)
+
 ## Test
 
 ```bash
@@ -56,12 +60,35 @@ pytest
 
 ## API
 
-`POST /search`
+### `POST /search`
 
 Request body:
 
 ```json
-{ "query": "black ferrari" }
+{
+  "query": "black ferrari",
+  "safesearch": "strict",
+  "country": "US",
+  "search_lang": "en"
+}
 ```
 
+| Field | Required | Default | Values |
+|-------|----------|---------|--------|
+| `query` | yes | — | 1–400 characters |
+| `safesearch` | no | `strict` | `off`, `strict` |
+| `country` | no | `US` | 2-letter code or `ALL` |
+| `search_lang` | no | `en` | 2+ letter language code |
+
 Returns a JSON array of Brave image results, or `{ "error": "..." }` with an appropriate HTTP status code.
+
+### `GET /proxy?url=...`
+
+Fetches an image server-side and returns the bytes. Used by ZIP download to work around browser CORS restrictions.
+
+- Only image URLs returned by a recent `/search` on this server are authorized
+- Hostnames are resolved before fetch; private, loopback, and link-local addresses are blocked
+- Outbound requests use a pinned public IP and reconstructed request URL instead of the raw client input
+- Responses are limited to 15 MB and must have an `image/*` content type
+
+Returns the image bytes on success, or `{ "error": "..." }` on failure.

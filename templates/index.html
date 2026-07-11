@@ -31,6 +31,11 @@
             padding: 10px; width: 100%; border: 1px solid #ccc; 
             border-radius: 6px; box-sizing: border-box; font-size: 0.95em;
         }
+        select {
+            padding: 10px; width: 100%; border: 1px solid #ccc;
+            border-radius: 6px; box-sizing: border-box; font-size: 0.95em;
+            background: white;
+        }
         .button-group { display: flex; gap: 8px; }
         button { 
             padding: 10px 18px; color: white; border: none; 
@@ -68,6 +73,40 @@
             <label for="query">Search Query</label>
             <input type="text" id="query" placeholder="e.g. Black Ferrari" onkeydown="if(event.key==='Enter') runSearch()">
         </div>
+        <div class="input-group">
+            <label for="safesearch">Safe Search</label>
+            <select id="safesearch">
+                <option value="strict" selected>Strict</option>
+                <option value="off">Off</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="country">Country</label>
+            <select id="country">
+                <option value="US" selected>United States</option>
+                <option value="GB">United Kingdom</option>
+                <option value="CA">Canada</option>
+                <option value="AU">Australia</option>
+                <option value="DE">Germany</option>
+                <option value="FR">France</option>
+                <option value="ES">Spain</option>
+                <option value="IT">Italy</option>
+                <option value="JP">Japan</option>
+                <option value="ALL">All countries</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label for="searchLang">Language</label>
+            <select id="searchLang">
+                <option value="en" selected>English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="it">Italian</option>
+                <option value="pt">Portuguese</option>
+                <option value="ja">Japanese</option>
+            </select>
+        </div>
         <div class="button-group">
             <button class="search-btn" onclick="runSearch()">Search</button>
             <button class="save-btn" id="saveAllBtn" style="display:none;" onclick="saveAllToZip()">Save All to Zip</button>
@@ -94,13 +133,17 @@
         const folder = zip.folder(query);
 
         const fetchPromises = Array.from(images).map(async (img, index) => {
+            const imageUrl = img.dataset.originalUrl || img.src;
             try {
-                const response = await fetch(img.src);
+                const response = await fetch(`/proxy?url=${encodeURIComponent(imageUrl)}`);
+                if (!response.ok) {
+                    throw new Error(`Proxy failed: ${response.status}`);
+                }
                 const blob = await response.blob();
                 const extension = blob.type.split('/')[1] || 'jpg';
                 folder.file(`image_${index + 1}.${extension}`, blob);
             } catch (e) {
-                console.error("Could not fetch image for zipping:", img.src);
+                console.error("Could not fetch image for zipping:", imageUrl);
             }
         });
 
@@ -137,6 +180,7 @@
                 card.className = 'img-card';
                 const img = document.createElement('img');
                 img.src = item.properties.url;
+                img.dataset.originalUrl = item.properties.url;
                 img.crossOrigin = "anonymous";
                 img.onclick = function() { openModal(this.src); };
                 img.onerror = function() { this.parentElement.remove(); };
@@ -153,6 +197,9 @@
     async function runSearch() {
         const resultsDiv = document.getElementById('results');
         const query = document.getElementById('query').value.trim();
+        const safesearch = document.getElementById('safesearch').value;
+        const country = document.getElementById('country').value;
+        const searchLang = document.getElementById('searchLang').value;
 
         if (!query) {
             alert("Search term required.");
@@ -165,7 +212,7 @@
             const response = await fetch('/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
+                body: JSON.stringify({ query, safesearch, country, search_lang: searchLang })
             });
 
             const data = await response.json();
