@@ -65,10 +65,6 @@
 
     <div class="controls">
         <div class="input-group">
-            <label for="apiKey">Brave API Key</label>
-            <input type="password" id="apiKey" placeholder="Token">
-        </div>
-        <div class="input-group">
             <label for="query">Search Query</label>
             <input type="text" id="query" placeholder="e.g. Black Ferrari" onkeydown="if(event.key==='Enter') runSearch()">
         </div>
@@ -156,11 +152,10 @@
 
     async function runSearch() {
         const resultsDiv = document.getElementById('results');
-        const apiKey = document.getElementById('apiKey').value;
-        const query = document.getElementById('query').value;
+        const query = document.getElementById('query').value.trim();
 
-        if (!apiKey || !query) {
-            alert("API key and search term required.");
+        if (!query) {
+            alert("Search term required.");
             return;
         }
 
@@ -170,17 +165,17 @@
             const response = await fetch('/search', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, apiKey })
+                body: JSON.stringify({ query })
             });
 
             const data = await response.json();
             resultsDiv.innerHTML = '';
 
-            if (data.error) {
-                resultsDiv.innerHTML = `<div class="error">${data.error}</div>`;
+            if (!response.ok || data.error) {
+                resultsDiv.innerHTML = `<div class="error">${data.error || 'Search failed'}</div>`;
                 return;
             }
-            
+
             renderAll(data);
 
         } catch (err) {
