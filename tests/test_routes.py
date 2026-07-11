@@ -99,3 +99,76 @@ def test_search_brave_422_returns_422(client, api_key):
 
     assert response.status_code == 422
     assert response.get_json()["error"] == "Option not in plan"
+
+
+def test_search_passes_search_options(client, api_key, brave_response):
+    with patch(
+        "app.brave_image_search", return_value=brave_response["results"]
+    ) as mock_search:
+        response = client.post(
+            "/search",
+            json={
+                "query": "black ferrari",
+                "safesearch": "off",
+                "country": "GB",
+                "search_lang": "en",
+            },
+        )
+
+    assert response.status_code == 200
+    mock_search.assert_called_once_with(
+        "black ferrari",
+        "test-api-key",
+        safesearch="off",
+        country="GB",
+        search_lang="en",
+    )
+
+
+def test_search_invalid_safesearch_returns_400(client, api_key):
+    response = client.post(
+        "/search",
+        json={"query": "black ferrari", "safesearch": "moderate"},
+    )
+
+    assert response.status_code == 400
+    assert "safesearch" in response.get_json()["error"]
+
+
+def test_search_invalid_country_returns_400(client, api_key):
+    response = client.post(
+        "/search",
+        json={"query": "black ferrari", "country": "USA"},
+    )
+
+    assert response.status_code == 400
+    assert "country" in response.get_json()["error"]
+
+
+def test_proxy_missing_url_returns_400(client):
+    response = client.get("/proxy")
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "url query parameter is required"
+
+
+def test_proxy_rejects_unsafe_url(client):
+    response = client.get("/proxy", query_string={"url": "https://127.0.0.1/a.jpg"})
+
+    assert response.status_code == 400
+    assert "disallowed" in response.get_json()["error"]
+
+
+def test_proxy_returns_image(client):
+    with patch(
+        "app.fetch_proxied_image",
+        return_value=(b"image-bytes", "image/jpeg"),
+    ):
+        response = client.get(
+            "/proxy",
+            query_string={"url": "https://example.com/image.jpg"},
+        )
+
+    assert response.status_code == 200
+    assert response.data == b"image-bytes"
+    assert response.mimetype == "image/jpeg"

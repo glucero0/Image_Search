@@ -1,8 +1,10 @@
+import ipaddress
 import os
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 from flask_cors import CORS
 
 load_dotenv()
@@ -16,10 +18,21 @@ CORS(app)
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/images/search"
 MAX_QUERY_LENGTH = 400
 REQUEST_TIMEOUT = (5, 30)
+MAX_PROXY_BYTES = 15 * 1024 * 1024
+ALLOWED_SAFESEARCH = {"off", "strict"}
+DEFAULT_SAFESEARCH = "strict"
+DEFAULT_COUNTRY = "US"
+DEFAULT_SEARCH_LANG = "en"
 
 
 class BraveAPIError(Exception):
     def __init__(self, message, status_code=502):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class ProxyError(Exception):
+    def __init__(self, message, status_code=400):
         super().__init__(message)
         self.status_code = status_code
 
@@ -53,14 +66,123 @@ def parse_brave_error(response):
     return f"Brave API error: {response.status_code}"
 
 
-def brave_image_search(query, api_key, timeout=REQUEST_TIMEOUT):
+def validate_safesearch(value):
+    if value is None:
+        return DEFAULT_SAFESEARCH
+    normalized = str(value).strip().lower()
+    if normalized not in ALLOWED_SAFESEARCH:
+        raise ValueError("safesearch must be 'off' or 'strict'")
+    return normalized
+
+
+def validate_country(value):
+    if value is None:
+        return DEFAULT_COUNTRY
+    normalized = str(value).strip().upper()
+    if normalized == "ALL":
+        return normalized
+    if len(normalized) != 2 or not normalized.isalpha():
+        raise ValueError("country must be a 2-letter code or ALL")
+    return normalized
+
+
+def validate_search_lang(value):
+    if value is None:
+        return DEFAULT_SEARCH_LANG
+    normalized = str(value).strip().lower()
+    if len(normalized) < 2 or not normalized.isalpha():
+        raise ValueError("search_lang must be a 2+ letter language code")
+    return normalized
+
+
+def is_safe_image_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    lowered = hostname.lower()
+    if lowered in {"localhost", "127.0.0.1", "::1"}:
+        return False
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return True
+
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+    )
+
+
+def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
+    if not is_safe_image_url(url):
+        raise ProxyError("Invalid or disallowed image URL", 400)
+
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            stream=True,
+            headers={"User-Agent": "ImageSearch/1.0"},
+        )
+    except requests.Timeout as exc:
+        raise ProxyError("Image request timed out", 504) from exc
+    except requests.RequestException as exc:
+        raise ProxyError("Failed to fetch image", 502) from exc
+
+    if response.status_code != 200:
+        raise ProxyError(f"Image fetch failed: {response.status_code}", 502)
+
+    content_type = response.headers.get("Content-Type", "application/octet-stream")
+    if not content_type.startswith("image/"):
+        raise ProxyError("URL did not return an image", 400)
+
+    content_length = response.headers.get("Content-Length")
+    if content_length and int(content_length) > MAX_PROXY_BYTES:
+        raise ProxyError("Image is too large", 413)
+
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > MAX_PROXY_BYTES:
+            raise ProxyError("Image is too large", 413)
+        chunks.append(chunk)
+
+    if not chunks:
+        raise ProxyError("Image response was empty", 502)
+
+    return b"".join(chunks), content_type.split(";")[0]
+
+
+def brave_image_search(
+    query,
+    api_key,
+    *,
+    safesearch=DEFAULT_SAFESEARCH,
+    country=DEFAULT_COUNTRY,
+    search_lang=DEFAULT_SEARCH_LANG,
+    timeout=REQUEST_TIMEOUT,
+):
     headers = {
         "Accept": "application/json",
         "X-Subscription-Token": api_key,
     }
     params = {
         "q": query,
-        "safesearch": "off",
+        "safesearch": safesearch,
+        "country": country,
+        "search_lang": search_lang,
         "count": 150,
     }
 
@@ -101,6 +223,20 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/proxy")
+def proxy():
+    url = (request.args.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url query parameter is required"}), 400
+
+    try:
+        image_data, content_type = fetch_proxied_image(url)
+    except ProxyError as exc:
+        return jsonify({"error": str(exc)}), exc.status_code
+
+    return Response(image_data, mimetype=content_type)
+
+
 @app.route("/search", methods=["POST"])
 def search():
     if not request.is_json:
@@ -118,6 +254,13 @@ def search():
             {"error": f"Query is too long (max {MAX_QUERY_LENGTH} characters)"}
         ), 400
 
+    try:
+        safesearch = validate_safesearch(data.get("safesearch"))
+        country = validate_country(data.get("country"))
+        search_lang = validate_search_lang(data.get("search_lang"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
     api_key = get_api_key()
     if not api_key or api_key in PLACEHOLDER_API_KEYS:
         return jsonify(
@@ -130,7 +273,13 @@ def search():
         ), 503
 
     try:
-        results = brave_image_search(query, api_key)
+        results = brave_image_search(
+            query,
+            api_key,
+            safesearch=safesearch,
+            country=country,
+            search_lang=search_lang,
+        )
         return jsonify(results)
     except BraveAPIError as exc:
         return jsonify({"error": str(exc)}), exc.status_code
