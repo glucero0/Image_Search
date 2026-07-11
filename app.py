@@ -11,10 +11,6 @@ from requests.adapters import HTTPAdapter
 
 load_dotenv()
 
-ALLOWED_PROXY_HOSTS = {
-    "imgs.search.brave.com",
-}
-
 base_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(base_dir, "templates")
 
@@ -211,11 +207,7 @@ def is_safe_image_url(url):
 
 def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
     parsed = validate_proxy_url(url)
-    if parsed.hostname not in ALLOWED_PROXY_HOSTS:
-        raise ProxyError("URL host is not allowed", 400)
-
     pinned_ip = resolve_public_ip(parsed.hostname)
-    safe_url = urlunparse(parsed)
 
     session = requests.Session()
     adapter = PinningHTTPAdapter(parsed.hostname, pinned_ip)
@@ -224,7 +216,7 @@ def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
 
     try:
         response = session.get(
-            safe_url,
+            url,
             timeout=timeout,
             stream=True,
             headers={"User-Agent": "ImageSearch/1.0"},
@@ -329,7 +321,7 @@ def proxy():
         image_data, content_type = fetch_proxied_image(url)
     except ProxyError as exc:
         app.logger.warning("Proxy error while fetching image: %s", exc)
-        return jsonify({"error": "Unable to fetch the requested image"}), exc.status_code
+        return jsonify({"error": str(exc)}), exc.status_code
 
     return Response(image_data, mimetype=content_type)
 
@@ -355,8 +347,8 @@ def search():
         safesearch = validate_safesearch(data.get("safesearch"))
         country = validate_country(data.get("country"))
         search_lang = validate_search_lang(data.get("search_lang"))
-    except ValueError:
-        return jsonify({"error": "Invalid request parameters"}), 400
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     api_key = get_api_key()
     if not api_key or api_key in PLACEHOLDER_API_KEYS:
