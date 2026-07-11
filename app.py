@@ -347,8 +347,8 @@ def search():
         safesearch = validate_safesearch(data.get("safesearch"))
         country = validate_country(data.get("country"))
         search_lang = validate_search_lang(data.get("search_lang"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+    except ValueError:
+        return jsonify({"error": "Invalid request parameters"}), 400
 
     api_key = get_api_key()
     if not api_key or api_key in PLACEHOLDER_API_KEYS:
