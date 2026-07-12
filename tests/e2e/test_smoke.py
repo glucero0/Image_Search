@@ -8,15 +8,19 @@ from playwright.sync_api import Page, expect
 
 from app import app
 
-E2E_IMAGE = (
+E2E_IMAGE_ONE = (
     "data:image/gif;base64,"
     "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+)
+E2E_IMAGE_TWO = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAD0lEQVQYGWNgYGAAAAAEAAH//wOxAAAAAABJRU5ErkJggg=="
 )
 E2E_RESULTS = [
     {
         "title": "Example image",
         "properties": {
-            "url": E2E_IMAGE,
+            "url": E2E_IMAGE_ONE,
             "width": 800,
             "height": 600,
         },
@@ -24,7 +28,7 @@ E2E_RESULTS = [
     {
         "title": "Second image",
         "properties": {
-            "url": E2E_IMAGE,
+            "url": E2E_IMAGE_TWO,
         },
     },
 ]
