@@ -18,6 +18,7 @@ A small Flask app that searches for images via the [Brave Image Search API](http
 
    ```bash
    pip install -r requirements-dev.txt
+   playwright install chromium
    ```
 
 3. Copy `.env.example` to `.env` and set your Brave API key:
@@ -49,10 +50,31 @@ Optional environment variables:
 ## Features
 
 - Image search with configurable **safe search**, **country**, and **language**
-- Grid display with lightbox preview
-- Bulk ZIP download via a server-side **image proxy** (avoids browser CORS failures)
+- Fetches up to **200 images** per search in one request (Brave’s per-query maximum)
+- **Image titles** shown below each thumbnail
+- **Image selection** with select all / deselect all
+- Grid display with lightbox preview (press **Esc** to close, **Enter** to search)
+- Bulk **ZIP download** of selected images via server-side **image proxy**, with download progress
+- ZIP contains a **folder** named after the query; files are named from each image’s **title** plus a millisecond timestamp (e.g. `Red_Car1731234567890.jpg`)
+- **Manifest export** to JSON or CSV (title, URL, source, dimensions)
+- Duplicate image URLs are filtered from results
 
 ## Test
+
+Unit tests:
+
+```bash
+pytest tests --ignore=tests/e2e
+```
+
+E2E smoke tests (requires Playwright browser):
+
+```bash
+playwright install chromium
+pytest tests/e2e
+```
+
+All tests:
 
 ```bash
 pytest
@@ -69,7 +91,9 @@ Request body:
   "query": "black ferrari",
   "safesearch": "strict",
   "country": "US",
-  "search_lang": "en"
+  "search_lang": "en",
+  "count": 200,
+  "offset": 0
 }
 ```
 
@@ -77,18 +101,37 @@ Request body:
 |-------|----------|---------|--------|
 | `query` | yes | — | 1–400 characters |
 | `safesearch` | no | `strict` | `off`, `strict` |
-| `country` | no | `US` | 2-letter code or `ALL` |
-| `search_lang` | no | `en` | 2+ letter language code |
+| `country` | no | `US` | Brave-supported 2-letter code or `ALL` |
+| `search_lang` | no | `en` | Brave-supported code (e.g. `en`, `es`, `jp`, `pt-pt`); aliases like `ja` → `jp` |
+| `count` | no | `50` | 1–200 (`200` is Brave’s per-request maximum; the UI always sends `200`) |
+| `offset` | no | `0` | 0–9 page offset (capped by `count` and Brave’s 200-image limit); the UI always sends `0` |
 
-Returns a JSON array of Brave image results, or `{ "error": "..." }` with an appropriate HTTP status code.
+Returns a JSON object:
+
+```json
+{
+  "results": [],
+  "offset": 0,
+  "count": 200,
+  "has_more": false
+}
+```
+
+`has_more` indicates whether another page is available when using `offset` pagination via the API. The web UI does not paginate; it requests `count=200` once.
+
+Or `{ "error": "..." }` with an appropriate HTTP status code.
 
 ### `GET /proxy?url=...`
 
 Fetches an image server-side and returns the bytes. Used by ZIP download to work around browser CORS restrictions.
 
-- Only image URLs returned by a recent `/search` on this server are authorized
+- Only image URLs returned by a recent `/search` on this server are authorized (including `properties.url` and `thumbnail.src`)
 - Hostnames are resolved before fetch; private, loopback, and link-local addresses are blocked
-- Outbound requests use a pinned public IP and reconstructed request URL instead of the raw client input
-- Responses are limited to 15 MB and must have an `image/*` content type
+- Outbound requests connect to the resolved public IP with TLS verified against the original hostname
+- Responses are limited to 15 MB and must be an image content type (`image/*`, or `application/octet-stream` for common image extensions)
 
 Returns the image bytes on success, or `{ "error": "..." }` on failure.
+
+## CI
+
+GitHub Actions runs unit tests and Playwright E2E smoke tests on push/PR. Dependabot keeps GitHub Actions dependencies updated.
