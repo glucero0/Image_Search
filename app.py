@@ -3,12 +3,14 @@ import os
 import socket
 import time
 from threading import Lock
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 from flask_cors import CORS
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 load_dotenv()
 
@@ -245,6 +247,19 @@ def get_authorized_proxy_url(requested_url):
     raise ProxyError("Image URL is not authorized", 403)
 
 
+def build_pinned_request_url(parsed, pinned_ip):
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    netloc = str(pinned_ip)
+    if port not in (80, 443):
+        netloc = f"{netloc}:{port}"
+
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    return urlunparse((parsed.scheme, netloc, path, "", "", ""))
+
+
 def is_blocked_ip(ip_str):
     try:
         ip = ipaddress.ip_address(ip_str)
@@ -317,6 +332,47 @@ def resolve_public_ip(hostname):
     raise ProxyError("Could not resolve image host", 400)
 
 
+class PinningHTTPAdapter(HTTPAdapter):
+    """Connect to a pre-resolved IP while verifying TLS for the original hostname."""
+
+    def __init__(self, hostname, pinned_ip):
+        self.hostname = hostname
+        self.pinned_ip = pinned_ip
+        super().__init__()
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs.setdefault("assert_hostname", self.hostname)
+        pool_kwargs.setdefault("server_hostname", self.hostname)
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            **pool_kwargs,
+        )
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        parsed = urlparse(request.url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+
+        netloc = self.pinned_ip
+        if port not in (80, 443):
+            netloc = f"{netloc}:{port}"
+
+        request.url = urlunparse((parsed.scheme, netloc, path, "", "", ""))
+        request.headers["Host"] = self.hostname
+        return super().send(
+            request,
+            stream=stream,
+            timeout=timeout,
+            verify=verify,
+            cert=cert,
+            proxies=proxies,
+        )
+
+
 def is_safe_image_url(url):
     try:
         validate_proxy_url(url)
@@ -328,16 +384,23 @@ def is_safe_image_url(url):
 def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
     authorized_url = get_authorized_proxy_url(url)
     parsed = urlparse(authorized_url)
-    resolve_public_ip(parsed.hostname)
+    pinned_ip = resolve_public_ip(parsed.hostname)
+    request_url = build_pinned_request_url(parsed, pinned_ip)
+
+    session = requests.Session()
+    adapter = PinningHTTPAdapter(parsed.hostname, pinned_ip)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
 
     try:
-        response = requests.get(
-            authorized_url,
+        response = session.get(
+            request_url,
             timeout=timeout,
             stream=True,
             headers={
                 "User-Agent": "ImageSearch/1.0",
                 "Accept": "image/*,*/*",
+                "Host": parsed.hostname,
             },
         )
     except requests.Timeout as exc:

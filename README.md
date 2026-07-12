@@ -127,6 +127,7 @@ Fetches an image server-side and returns the bytes. Used by ZIP download to work
 
 - Only image URLs returned by a recent `/search` on this server are authorized (including `properties.url` and `thumbnail.src`)
 - Hostnames are resolved before fetch; private, loopback, and link-local addresses are blocked
+- Outbound requests connect to the resolved public IP with TLS verified against the original hostname
 - Responses are limited to 15 MB and must be an image content type (`image/*`, or `application/octet-stream` for common image extensions)
 
 Returns the image bytes on success, or `{ "error": "..." }` on failure.

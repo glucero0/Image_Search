@@ -88,16 +88,21 @@ def test_fetch_proxied_image_returns_bytes():
     }
     mock_response.iter_content.return_value = [b"test"]
 
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_response
+
     with patch("app.socket.getaddrinfo", return_value=_public_dns_result()):
-        with patch("app.requests.get", return_value=mock_response) as mock_get:
+        with patch("app.requests.Session", return_value=mock_session):
             image_data, content_type = fetch_proxied_image(
                 "https://example.com/image.jpg"
             )
 
     assert image_data == b"test"
     assert content_type == "image/jpeg"
-    mock_get.assert_called_once()
-    assert mock_get.call_args.args[0] == "https://example.com/image.jpg"
+    mock_session.get.assert_called_once()
+    request_url = mock_session.get.call_args.args[0]
+    assert request_url.startswith("https://93.184.216.34/")
+    assert "example.com" not in request_url.split("//", 1)[1].split("/", 1)[0]
 
 
 def test_fetch_proxied_image_accepts_octet_stream_for_image_extension():
@@ -109,8 +114,11 @@ def test_fetch_proxied_image_accepts_octet_stream_for_image_extension():
     mock_response.headers = {"Content-Type": "application/octet-stream"}
     mock_response.iter_content.return_value = [b"test"]
 
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_response
+
     with patch("app.socket.getaddrinfo", return_value=_public_dns_result()):
-        with patch("app.requests.get", return_value=mock_response):
+        with patch("app.requests.Session", return_value=mock_session):
             image_data, content_type = fetch_proxied_image(
                 "https://example.com/image.jpg"
             )
@@ -128,8 +136,11 @@ def test_fetch_proxied_image_rejects_non_image_content_type():
     mock_response.headers = {"Content-Type": "text/html"}
     mock_response.iter_content.return_value = [b"<html></html>"]
 
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_response
+
     with patch("app.socket.getaddrinfo", return_value=_public_dns_result()):
-        with patch("app.requests.get", return_value=mock_response):
+        with patch("app.requests.Session", return_value=mock_session):
             with pytest.raises(ProxyError, match="did not return an image"):
                 fetch_proxied_image("https://example.com/page")
 
@@ -146,8 +157,11 @@ def test_fetch_proxied_image_rejects_oversized_image():
     }
     mock_response.iter_content.return_value = []
 
+    mock_session = MagicMock()
+    mock_session.get.return_value = mock_response
+
     with patch("app.socket.getaddrinfo", return_value=_public_dns_result()):
-        with patch("app.requests.get", return_value=mock_response):
+        with patch("app.requests.Session", return_value=mock_session):
             with pytest.raises(ProxyError, match="too large") as exc_info:
                 fetch_proxied_image("https://example.com/big.jpg")
 
@@ -158,9 +172,11 @@ def test_fetch_proxied_image_timeout_raises():
     register_proxy_urls_from_results(
         [{"properties": {"url": "https://example.com/image.jpg"}}]
     )
+    mock_session = MagicMock()
+    mock_session.get.side_effect = requests.Timeout("timed out")
 
     with patch("app.socket.getaddrinfo", return_value=_public_dns_result()):
-        with patch("app.requests.get", side_effect=requests.Timeout("timed out")):
+        with patch("app.requests.Session", return_value=mock_session):
             with pytest.raises(ProxyError, match="timed out") as exc_info:
                 fetch_proxied_image("https://example.com/image.jpg")
 
