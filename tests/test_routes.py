@@ -16,8 +16,11 @@ def test_search_returns_results(client, api_key, brave_response):
 
     assert response.status_code == 200
     data = response.get_json()
-    assert len(data) == 2
-    assert data[0]["properties"]["url"] == "https://example.com/image1.jpg"
+    assert len(data["results"]) == 2
+    assert data["results"][0]["properties"]["url"] == "https://example.com/image1.jpg"
+    assert data["offset"] == 0
+    assert data["count"] == 50
+    assert data["has_more"] is False
 
 
 def test_search_missing_query_returns_400(client, api_key):
@@ -122,7 +125,72 @@ def test_search_passes_search_options(client, api_key, brave_response):
         safesearch="off",
         country="GB",
         search_lang="en",
+        count=50,
+        offset=0,
     )
+
+
+def test_search_passes_pagination_options(client, api_key, brave_response):
+    with patch(
+        "app.brave_image_search", return_value=brave_response["results"]
+    ) as mock_search:
+        response = client.post(
+            "/search",
+            json={"query": "black ferrari", "count": 100, "offset": 1},
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["offset"] == 1
+    assert data["count"] == 100
+    mock_search.assert_called_once_with(
+        "black ferrari",
+        "test-api-key",
+        safesearch="strict",
+        country="US",
+        search_lang="en",
+        count=100,
+        offset=1,
+    )
+
+
+def test_search_rejects_offset_beyond_brave_cap(client, api_key):
+    response = client.post(
+        "/search",
+        json={"query": "black ferrari", "count": 100, "offset": 2},
+    )
+
+    assert response.status_code == 400
+    assert "offset must be between 0 and 1" in response.get_json()["error"]
+
+
+def test_search_has_more_when_page_is_full(client, api_key):
+    full_page = [{"properties": {"url": f"https://example.com/{i}.jpg"}} for i in range(50)]
+    with patch("app.brave_image_search", return_value=full_page):
+        response = client.post("/search", json={"query": "black ferrari", "offset": 1})
+
+    assert response.status_code == 200
+    assert response.get_json()["has_more"] is True
+
+
+def test_search_invalid_count_returns_400(client, api_key):
+    response = client.post(
+        "/search",
+        json={"query": "black ferrari", "count": 500},
+    )
+
+    assert response.status_code == 400
+    assert "count" in response.get_json()["error"]
+
+
+def test_search_invalid_offset_returns_400(client, api_key):
+    response = client.post(
+        "/search",
+        json={"query": "black ferrari", "offset": 10},
+    )
+
+    assert response.status_code == 400
+    assert "offset" in response.get_json()["error"]
 
 
 def test_search_invalid_safesearch_returns_400(client, api_key):

@@ -3,13 +3,12 @@ import os
 import socket
 import time
 from threading import Lock
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 from flask_cors import CORS
-from requests.adapters import HTTPAdapter
 
 load_dotenv()
 
@@ -36,9 +35,43 @@ BLOCKED_HOSTNAMES = frozenset(
     }
 )
 ALLOWED_SAFESEARCH = {"off", "strict"}
+ALLOWED_COUNTRIES = frozenset(
+    {
+        "AR", "AU", "AT", "BE", "BR", "CA", "CL", "DK", "FI", "FR", "DE", "GR",
+        "HK", "IN", "ID", "IT", "JP", "KR", "MY", "MX", "NL", "NZ", "NO", "CN",
+        "PL", "PT", "PH", "RU", "SA", "ZA", "ES", "SE", "CH", "TW", "TR", "GB",
+        "US", "ALL",
+    }
+)
+ALLOWED_SEARCH_LANGS = frozenset(
+    {
+        "ar", "eu", "bn", "bg", "ca", "zh-hans", "zh-hant", "hr", "cs", "da",
+        "nl", "en", "en-gb", "et", "fi", "fr", "gl", "de", "el", "gu", "he",
+        "hi", "hu", "is", "it", "jp", "kn", "ko", "lv", "lt", "ms", "ml", "mr",
+        "nb", "pl", "pt-br", "pt-pt", "pa", "ro", "ru", "sr", "sk", "sl", "es",
+        "sv", "ta", "te", "th", "tr", "uk", "vi",
+    }
+)
+SEARCH_LANG_ALIASES = {
+    "ja": "jp",
+    "pt": "pt-pt",
+    "zh": "zh-hans",
+    "zh-cn": "zh-hans",
+    "zh-tw": "zh-hant",
+}
 DEFAULT_SAFESEARCH = "strict"
 DEFAULT_COUNTRY = "US"
 DEFAULT_SEARCH_LANG = "en"
+DEFAULT_COUNT = 50
+MAX_COUNT = 200
+MAX_BRAVE_IMAGES = 200
+MAX_OFFSET = 9
+
+
+def max_offset_for_count(count):
+    if count < 1:
+        return 0
+    return min(MAX_OFFSET, max(0, (MAX_BRAVE_IMAGES - 1) // count))
 
 
 class BraveAPIError(Exception):
@@ -89,6 +122,19 @@ def parse_brave_error(response):
     return f"Brave API error: {response.status_code}"
 
 
+def format_brave_422_error(response):
+    detail = parse_brave_error(response)
+    lowered = detail.lower()
+    if any(term in lowered for term in ("plan", "subscription", "not in plan")):
+        return (
+            f"{detail} "
+            "Image Search requires a Brave Search plan that includes images "
+            "(not Autosuggest or Spellcheck only). "
+            "Verify your API key at https://api-dashboard.search.brave.com/"
+        )
+    return detail
+
+
 def validate_safesearch(value):
     if value is None:
         return DEFAULT_SAFESEARCH
@@ -102,10 +148,10 @@ def validate_country(value):
     if value is None:
         return DEFAULT_COUNTRY
     normalized = str(value).strip().upper()
-    if normalized == "ALL":
-        return normalized
-    if len(normalized) != 2 or not normalized.isalpha():
-        raise ValidationError("country must be a 2-letter code or ALL")
+    if normalized not in ALLOWED_COUNTRIES:
+        raise ValidationError(
+            "country must be a Brave-supported 2-letter code or ALL"
+        )
     return normalized
 
 
@@ -113,14 +159,56 @@ def validate_search_lang(value):
     if value is None:
         return DEFAULT_SEARCH_LANG
     normalized = str(value).strip().lower()
-    if len(normalized) < 2 or not normalized.isalpha():
-        raise ValidationError("search_lang must be a 2+ letter language code")
+    normalized = SEARCH_LANG_ALIASES.get(normalized, normalized)
+    if normalized not in ALLOWED_SEARCH_LANGS:
+        raise ValidationError(
+            "search_lang must be a Brave-supported language code "
+            "(e.g. en, es, jp, pt-pt)"
+        )
     return normalized
 
 
 def clear_allowed_proxy_urls():
     with ALLOWED_PROXY_LOCK:
         ALLOWED_PROXY_URLS.clear()
+
+
+def validate_count(value):
+    if value is None:
+        return DEFAULT_COUNT
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("count must be an integer between 1 and 200") from exc
+    if count < 1 or count > MAX_COUNT:
+        raise ValidationError("count must be an integer between 1 and 200")
+    return count
+
+
+def validate_offset(value):
+    if value is None:
+        return 0
+    try:
+        offset = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("offset must be an integer between 0 and 9") from exc
+    if offset < 0 or offset > MAX_OFFSET:
+        raise ValidationError("offset must be an integer between 0 and 9")
+    return offset
+
+
+def build_search_response(results, offset, count):
+    page_limit = max_offset_for_count(count)
+    if offset == 0:
+        has_more = len(results) >= count and count < MAX_BRAVE_IMAGES
+    else:
+        has_more = len(results) > 0 and offset < page_limit
+    return {
+        "results": results,
+        "offset": offset,
+        "count": count,
+        "has_more": has_more,
+    }
 
 
 def cleanup_expired_proxy_urls():
@@ -142,6 +230,10 @@ def register_proxy_urls_from_results(results):
             if image_url:
                 ALLOWED_PROXY_URLS[image_url] = expires_at
 
+            thumbnail = (item.get("thumbnail") or {}).get("src")
+            if thumbnail:
+                ALLOWED_PROXY_URLS[thumbnail] = expires_at
+
 
 def get_authorized_proxy_url(requested_url):
     validate_proxy_url(requested_url)
@@ -151,19 +243,6 @@ def get_authorized_proxy_url(requested_url):
         if expires_at and expires_at > time.time():
             return requested_url
     raise ProxyError("Image URL is not authorized", 403)
-
-
-def build_pinned_request_url(parsed, pinned_ip):
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    netloc = str(pinned_ip)
-    if port not in (80, 443):
-        netloc = f"{netloc}:{port}"
-
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-
-    return urlunparse((parsed.scheme, netloc, path, "", "", ""))
 
 
 def is_blocked_ip(ip_str):
@@ -200,6 +279,18 @@ def validate_proxy_url(url):
     return parsed
 
 
+def is_image_content_type(content_type, url):
+    normalized = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if normalized.startswith("image/"):
+        return True
+    if normalized in {"application/octet-stream", "binary/octet-stream"}:
+        path = urlparse(url).path.lower()
+        return path.endswith(
+            (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".ico")
+        )
+    return False
+
+
 def resolve_public_ip(hostname):
     try:
         addrinfos = socket.getaddrinfo(
@@ -226,37 +317,6 @@ def resolve_public_ip(hostname):
     raise ProxyError("Could not resolve image host", 400)
 
 
-class PinningHTTPAdapter(HTTPAdapter):
-    def __init__(self, hostname, pinned_ip):
-        self.hostname = hostname
-        self.pinned_ip = pinned_ip
-        super().__init__()
-
-    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
-        parsed = urlparse(request.url)
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
-
-        netloc = str(self.pinned_ip)
-        if port not in (80, 443):
-            netloc = f"{netloc}:{port}"
-
-        request.url = urlunparse(
-            (parsed.scheme, netloc, path, "", "", "")
-        )
-        request.headers["Host"] = self.hostname
-        return super().send(
-            request,
-            stream=stream,
-            timeout=timeout,
-            verify=verify,
-            cert=cert,
-            proxies=proxies,
-        )
-
-
 def is_safe_image_url(url):
     try:
         validate_proxy_url(url)
@@ -268,22 +328,16 @@ def is_safe_image_url(url):
 def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
     authorized_url = get_authorized_proxy_url(url)
     parsed = urlparse(authorized_url)
-    pinned_ip = resolve_public_ip(parsed.hostname)
-    request_url = build_pinned_request_url(parsed, pinned_ip)
-
-    session = requests.Session()
-    adapter = PinningHTTPAdapter(parsed.hostname, pinned_ip)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
+    resolve_public_ip(parsed.hostname)
 
     try:
-        response = session.get(
-            request_url,
+        response = requests.get(
+            authorized_url,
             timeout=timeout,
             stream=True,
             headers={
                 "User-Agent": "ImageSearch/1.0",
-                "Host": parsed.hostname,
+                "Accept": "image/*,*/*",
             },
         )
     except requests.Timeout as exc:
@@ -295,7 +349,7 @@ def fetch_proxied_image(url, timeout=REQUEST_TIMEOUT):
         raise ProxyError(f"Image fetch failed: {response.status_code}", 502)
 
     content_type = response.headers.get("Content-Type", "application/octet-stream")
-    if not content_type.startswith("image/"):
+    if not is_image_content_type(content_type, authorized_url):
         raise ProxyError("URL did not return an image", 400)
 
     content_length = response.headers.get("Content-Length")
@@ -325,6 +379,8 @@ def brave_image_search(
     safesearch=DEFAULT_SAFESEARCH,
     country=DEFAULT_COUNTRY,
     search_lang=DEFAULT_SEARCH_LANG,
+    count=DEFAULT_COUNT,
+    offset=0,
     timeout=REQUEST_TIMEOUT,
 ):
     headers = {
@@ -336,7 +392,8 @@ def brave_image_search(
         "safesearch": safesearch,
         "country": country,
         "search_lang": search_lang,
-        "count": 150,
+        "count": count,
+        "offset": offset,
     }
 
     try:
@@ -353,13 +410,7 @@ def brave_image_search(
             "Access Denied: Check your Brave API subscription.", 502
         )
     if response.status_code == 422:
-        raise BraveAPIError(
-            f"{parse_brave_error(response)} "
-            "Image Search requires a Brave Search plan that includes images "
-            "(not Autosuggest or Spellcheck only). "
-            "Verify your API key at https://api-dashboard.search.brave.com/",
-            422,
-        )
+        raise BraveAPIError(format_brave_422_error(response), 422)
     if response.status_code != 200:
         raise BraveAPIError(parse_brave_error(response), 502)
 
@@ -412,8 +463,21 @@ def search():
         safesearch = validate_safesearch(data.get("safesearch"))
         country = validate_country(data.get("country"))
         search_lang = validate_search_lang(data.get("search_lang"))
+        count = validate_count(data.get("count"))
+        offset = validate_offset(data.get("offset"))
     except ValidationError as exc:
         return jsonify({"error": exc.message}), 400
+
+    page_limit = max_offset_for_count(count)
+    if offset > page_limit:
+        return jsonify(
+            {
+                "error": (
+                    f"offset must be between 0 and {page_limit} "
+                    f"when count is {count} (Brave returns up to {MAX_BRAVE_IMAGES} images)"
+                )
+            }
+        ), 400
 
     api_key = get_api_key()
     if not api_key or api_key in PLACEHOLDER_API_KEYS:
@@ -433,9 +497,11 @@ def search():
             safesearch=safesearch,
             country=country,
             search_lang=search_lang,
+            count=count,
+            offset=offset,
         )
         register_proxy_urls_from_results(results)
-        return jsonify(results)
+        return jsonify(build_search_response(results, offset, count))
     except BraveAPIError as exc:
         return jsonify({"error": str(exc)}), exc.status_code
 

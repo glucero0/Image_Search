@@ -29,6 +29,8 @@ def test_brave_image_search_returns_results(brave_response):
     assert kwargs["params"]["safesearch"] == "off"
     assert kwargs["params"]["country"] == "GB"
     assert kwargs["params"]["search_lang"] == "en"
+    assert kwargs["params"]["count"] == 50
+    assert kwargs["params"]["offset"] == 0
 
 
 def test_brave_image_search_missing_results_key():
@@ -65,6 +67,21 @@ def test_brave_image_search_422_raises_with_detail():
             brave_image_search("query", "test-key")
 
     assert exc_info.value.status_code == 422
+    assert "Brave Search plan that includes images" in str(exc_info.value)
+
+
+def test_brave_image_search_422_validation_error_omits_plan_hint():
+    mock_response = MagicMock()
+    mock_response.status_code = 422
+    mock_response.json.return_value = {
+        "error": {"detail": "Unable to validate request parameter(s)"}
+    }
+
+    with patch("app.requests.get", return_value=mock_response):
+        with pytest.raises(BraveAPIError, match="Unable to validate") as exc_info:
+            brave_image_search("query", "test-key", search_lang="jp")
+
+    assert "Brave Search plan that includes images" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("status_code", [429, 500, 502])
