@@ -1,8 +1,6 @@
-import json
 import os
 import threading
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -10,19 +8,34 @@ from playwright.sync_api import Page, expect
 
 from app import app
 
-FIXTURE_PATH = Path(__file__).parent.parent / "fixtures" / "brave_response.json"
+E2E_IMAGE = (
+    "data:image/gif;base64,"
+    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+)
+E2E_RESULTS = [
+    {
+        "title": "Example image",
+        "properties": {
+            "url": E2E_IMAGE,
+            "width": 800,
+            "height": 600,
+        },
+    },
+    {
+        "title": "Second image",
+        "properties": {
+            "url": E2E_IMAGE,
+        },
+    },
+]
 
 
 @pytest.fixture(scope="module")
 def server_url():
     os.environ["BRAVE_API_KEY"] = "test-api-key"
-    fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
     def mock_search(*args, **kwargs):
-        offset = kwargs.get("offset", 0)
-        if offset == 0:
-            return fixture["results"]
-        return []
+        return E2E_RESULTS
 
     app.config["TESTING"] = True
     with patch("app.brave_image_search", side_effect=mock_search):
@@ -60,6 +73,8 @@ def test_search_displays_results(page: Page):
 def test_escape_closes_modal(page: Page):
     page.get_by_label("Search Query").fill("black ferrari")
     page.get_by_role("button", name="Search").click()
+
+    expect(page.locator(".img-card")).to_have_count(2)
     page.locator(".img-card img").first.click()
 
     expect(page.locator("#imageModal")).to_be_visible()
