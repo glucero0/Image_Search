@@ -79,7 +79,7 @@ def test_search_brave_api_error_returns_status(client, api_key):
         response = client.post("/search", json={"query": "black ferrari"})
 
     assert response.status_code == 502
-    assert response.get_json()["error"] == "Brave API error: 429"
+    assert response.get_json()["error"] == "Unable to complete search request"
 
 
 def test_search_timeout_returns_504(client, api_key):
@@ -90,7 +90,7 @@ def test_search_timeout_returns_504(client, api_key):
         response = client.post("/search", json={"query": "black ferrari"})
 
     assert response.status_code == 504
-    assert response.get_json()["error"] == "Search request timed out"
+    assert response.get_json()["error"] == "Unable to complete search request"
 
 
 def test_search_brave_422_returns_422(client, api_key):
@@ -101,7 +101,7 @@ def test_search_brave_422_returns_422(client, api_key):
         response = client.post("/search", json={"query": "black ferrari"})
 
     assert response.status_code == 422
-    assert response.get_json()["error"] == "Option not in plan"
+    assert response.get_json()["error"] == "Unable to complete search request"
 
 
 def test_search_passes_search_options(client, api_key, brave_response):

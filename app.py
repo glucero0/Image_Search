@@ -566,7 +566,8 @@ def search():
         register_proxy_urls_from_results(results)
         return jsonify(build_search_response(results, offset, count))
     except BraveAPIError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
+        app.logger.error("Brave API error during search request", exc_info=True)
+        return jsonify({"error": "Unable to complete search request"}), exc.status_code
 
 
 if __name__ == "__main__":
